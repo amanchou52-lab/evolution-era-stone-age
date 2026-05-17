@@ -14,7 +14,9 @@ const config = {
     height: 500,
     parent: 'phaser-canvas-container',
     backgroundColor: '#0f0b07',
-    pixelArt: true, // क्रिस्टल क्लियर यूआई के लिए ब्लर हटा दिया (समस्या #2 का हल)
+    pixelArt: true,            // पिक्सेल आर्ट को शार्प रखने के लिए
+    antialias: false,          // ब्लर इफेक्ट को पूरी तरह बंद करने के लिए (समस्या #2 फिक्स)
+    roundPixels: true,         // पिक्सेल्स को राउंड रखने के लिए ताकि टेक्स्ट धुंधला न हो
     scene: { preload: preload, create: create, update: update }
 };
 
@@ -44,9 +46,11 @@ function drawIslandGrid(scene) {
         const y = startY + isl.r * (cellSize + padding);
         const isUnlocked = G.unlockedIslands.includes(isl.id);
         
+        // आइलैंड बॉक्स का निर्माण
         const rect = scene.add.rectangle(x + cellSize/2, y + cellSize/2, cellSize, cellSize, 0x281d13).setInteractive();
         rect.setStrokeStyle(2, isUnlocked ? 0x5c4028 : 0x3a2a10);
         
+        // लॉक टापू हैंडलर
         if (!isUnlocked) {
             rect.setFillStyle(0x0e0b07);
             scene.add.text(x + cellSize/2, y + cellSize/2 - 10, '🔒', { fontSize: '20px' }).setOrigin(0.5);
@@ -55,6 +59,7 @@ function drawIslandGrid(scene) {
             return;
         }
 
+        // होम टापू
         if (isl.type === 'home') {
             rect.setStrokeStyle(2, 0xcc9933);
             scene.add.text(x + cellSize/2, y + cellSize/2 - 12, '🏠', { fontSize: '26px' }).setOrigin(0.5);
@@ -62,6 +67,7 @@ function drawIslandGrid(scene) {
         } else {
             const plotCrop = G.plots[isl.id];
             
+            // खेती की लॉजिक
             if (plotCrop) {
                 const cropData = CROPS[plotCrop.cropType];
                 const done = (currentTime - plotCrop.plantedAt) >= cropData.growTime;
@@ -71,28 +77,37 @@ function drawIslandGrid(scene) {
                 rect.on('pointerdown', () => {
                     if (done || plotCrop.state === 'wilted') {
                         harvestCrop(isl.id, plotCrop.state === 'wilted');
-                        drawIslandGrid(scene);
+                        drawIslandGrid(scene); // तुरंत री-रेंडर
                     } else {
                         toast('⏳ फसल अभी कच्ची है!', 'error');
                     }
                 });
-            } else if (isl.res) {
-                // ⏱️ 10 मिनट का टाइम लिमिट लॉजिक (समस्या #3 का हल)
+            } 
+            // 🛑 रिसोर्स नोड लॉजिक (समस्या #1 फिक्स - टाइमर लॉक)
+            else if (isl.res) {
                 const lastHarvest = G.nodes[isl.id] || 0;
                 const cooldownDuration = 600; // 10 मिनट = 600 सेकंड
                 const timePassed = currentTime - lastHarvest;
-                const onCooldown = timePassed < cooldownDuration;
+                const onCooldown = lastHarvest > 0 && timePassed < cooldownDuration;
 
                 const emojis = { wood: '🪵', stone: '🪨', iron: '⚙️', gold: '🥇' };
                 scene.add.text(x + cellSize/2, y + cellSize/2 - 12, emojis[isl.res], { fontSize: '24px' }).setOrigin(0.5);
                 
                 if (onCooldown) {
                     const remainingTime = cooldownDuration - timePassed;
-                    scene.add.text(x + cellSize/2, y + cellSize/2 + 16, formatTime(remainingTime), { fontSize: '10px', fill: '#cc4444' }).setOrigin(0.5);
-                    rect.on('pointerdown', () => toast(`⏳ यह नोड खाली है! ${formatTime(remainingTime)} बाद लकड़ी आएगी।`, 'error'));
+                    // टाइमर टेक्स्ट स्क्रीन पर लाइव दिखेगा
+                    scene.add.text(x + cellSize/2, y + cellSize/2 + 16, formatTime(remainingTime), { fontSize: '11px', fill: '#cc4444', fontWeight: 'bold' }).setOrigin(0.5);
+                    
+                    // जब कूलडाउन हो, तो क्लिक करने पर सिर्फ अलर्ट आएगा, माइनिंग नहीं होगी
+                    rect.removeAllListeners('pointerdown');
+                    rect.on('pointerdown', () => toast(`⏳ नोड खाली है! नई लकड़ी आने में ${formatTime(remainingTime)} बाकी हैं।`, 'error'));
                 } else {
                     scene.add.text(x + cellSize/2, y + cellSize/2 + 16, '⛏️ Chop/Mine', { fontSize: '10px', fill: '#5cb350' }).setOrigin(0.5);
-                    rect.on('pointerdown', () => harvestResourceNode(isl));
+                    
+                    rect.removeAllListeners('pointerdown');
+                    rect.on('pointerdown', () => {
+                        harvestResourceNodeDirect(isl, scene);
+                    });
                 }
             } else {
                 scene.add.text(x + cellSize/2, y + cellSize/2 - 12, '🌱', { fontSize: '24px' }).setOrigin(0.5);
@@ -111,23 +126,31 @@ function openPlantingSelector(plotId) {
     if (typeof showPlantModal === 'function') showPlantModal(plotId);
 }
 
-function harvestResourceNode(isl) {
+// डायरेक्ट माइनिंग फंक्शन जो तुरंत टाइमस्टैम्प को लॉक करता है
+function harvestResourceNodeDirect(isl, scene) {
     const toolsMap = { wood: 'stone_axe', stone: 'stone_pickaxe' };
     const neededTool = toolsMap[isl.res];
-    const currentTime = Math.floor(Date.now() / 1000);
+    const clickTime = Math.floor(Date.now() / 1000);
 
-    if (!deductToolDurability(neededTool)) return;
+    if (!deductToolDurability(neededTool)) return; //
 
     const baseYield = isl.res === 'wood' ? 10 : 6;
-    if (isStorageFull(isl.res, 'resources', baseYield)) return;
+    if (isStorageFull(isl.res, 'resources', baseYield)) return; //
 
+    // 1. स्टेट अपडेट
     G.resources[isl.res] += baseYield;
-    G.nodes[isl.id] = currentTime; // टाइमस्टैम्प लॉक सेव कर दिया!
+    G.nodes[isl.id] = clickTime; // इसी वक्त टाइमस्टैम्प लॉक करें!
     
-    toast(`⛏️ Mined +${baseYield} ${isl.res.toUpperCase()}!`, 'success');
+    // 2. सेव डेटा
     saveGame();
-    renderInventory();
-    renderGrid();
+    
+    // 3. अलर्ट और यूआई अपडेट
+    toast(`⛏️ Mined +${baseYield} ${isl.res.toUpperCase()}!`, 'success');
+    if (typeof renderInventory === 'function') renderInventory();
+    if (typeof updateHeader === 'function') updateHeader();
+    
+    // 4. तुरंत स्क्रीन को दोबारा ड्रा करें ताकि टाइमर लॉक लाइव हो जाए
+    drawIslandGrid(scene);
 }
 
 function triggerIslandUnlockModal(isl) {
