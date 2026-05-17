@@ -6,7 +6,6 @@ function switchTab(tabId) {
     document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
     
-    // Find button using onclick attribute match or text
     const buttons = document.querySelectorAll('.tab-btn');
     buttons.forEach(btn => {
         if(btn.getAttribute('onclick').includes(tabId)) btn.classList.add('active');
@@ -34,93 +33,136 @@ function updateHeader() {
     document.getElementById('xp-text').textContent = `${G.xp.toLocaleString()} / ${nextXP.toLocaleString()} XP`;
 }
 
+// 🌱 PLANT SELECTION MODAL FIX (समस्या #1 का हल)
+function showPlantModal(plotId) {
+    document.getElementById('modal-title').textContent = '🌱 Plant a Crop';
+    document.getElementById('modal-subtitle').textContent = 'अपने बैग से एक बीज चुनें।';
+
+    const body = document.createElement('div');
+    body.className = 'inv-grid';
+    body.style.gridTemplateColumns = '1fr';
+    body.style.gap = '8px';
+
+    let hasSeeds = false;
+
+    Object.entries(CROPS).forEach(([key, crop]) => {
+        if (G.level >= crop.unlockLevel) {
+            const seedCount = G.seeds[key] || 0;
+            if (seedCount > 0) {
+                hasSeeds = true;
+                const btn = document.createElement('button');
+                btn.className = 'btn-secondary';
+                btn.style.display = 'flex';
+                btn.style.justifyContent = 'space-between';
+                btn.style.alignItems = 'center';
+                btn.style.padding = '10px';
+                btn.style.width = '100%';
+                btn.innerHTML = `
+                    <span>${crop.emoji} <b>${crop.name}</b> (Owned: ${seedCount})</span>
+                    <span style="color:var(--green-light);">⏱ ${crop.growTime}s</span>
+                `;
+                btn.onclick = () => {
+                    plantCrop(plotId, key);
+                    closeModal();
+                };
+                body.appendChild(btn);
+            }
+        }
+    });
+
+    if (!hasSeeds) {
+        body.innerHTML = '<div style="text-align:center;color:var(--text-dim);padding:15px;">आपके पास कोई बीज नहीं हैं!<br>नीचे ट्राइबल बाज़ार से बीज खरीदें।</div>';
+    }
+
+    document.getElementById('modal-body').innerHTML = '';
+    document.getElementById('modal-body').appendChild(body);
+    
+    const actions = document.getElementById('modal-actions');
+    actions.innerHTML = '<button class="btn-secondary" onclick="closeModal()">✕ Cancel</button>';
+    document.getElementById('modal-overlay').classList.add('show');
+}
+
+function plantCrop(plotId, cropType) {
+    if ((G.seeds[cropType] || 0) <= 0) return;
+    G.seeds[cropType]--;
+    G.plots[plotId] = { cropType, plantedAt: now(), state: 'growing' };
+    toast(`🌱 Planted ${CROPS[cropType].name}!`, 'success');
+    saveGame();
+    renderAll();
+    if (typeof renderGrid === 'function') renderGrid();
+}
+
+function harvestCrop(plotId, isWilted) {
+    const plot = G.plots[plotId];
+    if (!plot) return;
+    const crop = CROPS[plot.cropType];
+    let amount = 1;
+
+    if (isStorageFull(plot.cropType, 'crops', amount)) return;
+
+    G.crops[plot.cropType] = (G.crops[plot.cropType] || 0) + amount;
+    delete G.plots[plotId];
+
+    addXP(crop.xp);
+    toast(`🌾 Harvested ${amount}x ${crop.name}! +${crop.xp} XP`, 'success');
+    saveGame();
+    renderAll();
+}
+
 // ══════════════════════════════════════════════
-// 4.2 INVENTORY RENDERER
+// 4.2 INVENTORY & MARKETPLACE RENDERERS
 // ══════════════════════════════════════════════
 
 function renderInventory() {
-    // 1. Resources Tab (Wood, Stone, Iron, Gold)
     const resList = document.getElementById('res-list');
-    const resources = [
-        { key:'wood',  emoji:'🪵', name:'Wood' },
-        { key:'stone', emoji:'🪨', name:'Stone' },
-        { key:'iron',  emoji:'⚙️', name:'Iron' },
-        { key:'gold',  emoji:'🥇', name:'Gold' }
-    ];
-    
     let resHtml = '';
+    const resources = [{ key:'wood', emoji:'🪵', name:'Wood' }, { key:'stone', emoji:'🪨', name:'Stone' }, { key:'iron', emoji:'⚙️', name:'Iron' }, { key:'gold', emoji:'🥇', name:'Gold' }];
     resources.forEach(r => {
-        resHtml += `
-            <div class="res-row">
-                <div class="res-left"><span class="res-emoji">${r.emoji}</span><span class="res-name">${r.name}</span></div>
-                <span class="res-val">${G.resources[r.key] || 0}</span>
-            </div>
-        `;
+        resHtml += `<div class="res-row"><div class="res-left"><span>${r.emoji} ${r.name}</span></div><span class="res-val">${G.resources[r.key] || 0}</span></div>`;
     });
     if(resList) resList.innerHTML = resHtml;
 
-    // 2. Seeds Tab
     const seedInv = document.getElementById('seed-inv');
     if (seedInv) {
         seedInv.innerHTML = '';
         Object.entries(CROPS).forEach(([key, crop]) => {
             const count = G.seeds[key] || 0;
-            if (count > 0 || G.level >= crop.unlockLevel) {
-                const div = document.createElement('div');
-                div.className = 'inv-item';
-                div.innerHTML = `
-                    <div class="i-emoji">🌱</div>
-                    <div class="i-count">${count}</div>
-                    <div class="i-name">${crop.name} Seed</div>
-                `;
-                seedInv.appendChild(div);
-            }
+            const div = document.createElement('div');
+            div.className = 'inv-item';
+            div.innerHTML = `<div>🌱</div><div class="i-count">${count}</div><div class="i-name">${crop.name} Seed</div>`;
+            seedInv.appendChild(div);
         });
     }
 
-    // 3. Crops Tab
     const cropInv = document.getElementById('crop-inv');
     if (cropInv) {
         cropInv.innerHTML = '';
         Object.entries(G.crops).forEach(([key, count]) => {
-            if (count > 0 || G.level >= CROPS[key].unlockLevel) {
-                const div = document.createElement('div');
-                div.className = 'inv-item';
-                div.innerHTML = `
-                    <div class="i-emoji">${CROPS[key].emoji}</div>
-                    <div class="i-count">${count}</div>
-                    <div class="i-name">${CROPS[key].name}</div>
-                `;
-                cropInv.appendChild(div);
-            }
+            const div = document.createElement('div');
+            div.className = 'inv-item';
+            div.innerHTML = `<div>${CROPS[key].emoji}</div><div class="i-count">${count}</div><div class="i-name">${CROPS[key].name}</div>`;
+            cropInv.appendChild(div);
         });
     }
 
-    // 4. Food Tab
     const foodInv = document.getElementById('food-inv');
     if (foodInv) {
         foodInv.innerHTML = '';
         if (Object.keys(G.food).length === 0) {
-            foodInv.innerHTML = '<div style="font-size:12px;color:var(--text-dim);text-align:center;padding:10px;">No cooked food yet.<br>Firepit में खाना पकाएं!</div>';
+            foodInv.innerHTML = '<div style="font-size:12px;color:var(--text-dim);text-align:center;padding:10px;">No cooked food yet.</div>';
         } else {
             Object.entries(G.food).forEach(([rId, count]) => {
                 if (count <= 0) return;
                 const recipe = RECIPES[rId];
-                if (!recipe) return;
                 const div = document.createElement('div');
                 div.className = 'cooking-active';
-                div.style.padding = '8px';
+                div.style.padding = '6px';
                 div.style.background = 'var(--bg-card)';
-                div.style.border = '1px solid var(--border)';
-                div.style.borderRadius = '6px';
-                div.style.marginBottom = '6px';
+                div.style.marginBottom = '4px';
                 div.innerHTML = `
-                    <div class="ca-emoji">${recipe.emoji}</div>
-                    <div class="ca-info" style="margin-left: 8px;">
-                        <div class="ca-name" style="font-weight:600;color:var(--text-bright);">${recipe.name}</div>
-                        <div class="ca-timer" style="font-size:11px;color:var(--green-light);">+${recipe.xp} XP • Qty: ${count}</div>
-                    </div>
-                    <button class="eat-btn" onclick="eatFood('${rId}')" style="margin-left:auto;">🍽️ Eat</button>
+                    <span>${recipe.emoji}</span>
+                    <div style="flex:1;margin-left:8px;"><b>${recipe.name}</b><br><span style="font-size:10px;color:var(--green-light)">+${recipe.xp} XP (Qty: ${count})</span></div>
+                    <button class="eat-btn" onclick="eatFood('${rId}')">Eat</button>
                 `;
                 foodInv.appendChild(div);
             });
@@ -130,24 +172,18 @@ function renderInventory() {
 
 function eatFood(recipeId) {
     if ((G.food[recipeId] || 0) <= 0) return;
-    const recipe = RECIPES[recipeId];
     G.food[recipeId]--;
     if (G.food[recipeId] <= 0) delete G.food[recipeId];
-    
-    addXP(recipe.xp);
-    toast(`🍽️ Ate ${recipe.name}! +${recipe.xp} XP`, 'success');
-    log(`Ate ${recipe.name} (+${recipe.xp} XP)`);
+    addXP(RECIPES[recipeId].xp);
+    toast(`🍽️ Ate ${RECIPES[recipeId].name}!`, 'success');
+    saveGame();
     renderInventory();
 }
-
-// ══════════════════════════════════════════════
-// 4.3 MARKETPLACE & COOKING BUILDING INTERFACES
-// ══════════════════════════════════════════════
 
 function renderMarketplace() {
     const cont = document.getElementById('market-container');
     if (!cont) return;
-    cont.innerHTML = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;"></div>';
+    cont.innerHTML = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;"></div>';
     const grid = cont.firstChild;
 
     Object.entries(CROPS).forEach(([key, crop]) => {
@@ -155,18 +191,13 @@ function renderMarketplace() {
             const box = document.createElement('div');
             box.className = 'inv-item';
             box.style.textAlign = 'left';
-            box.style.padding = '8px';
+            box.style.padding = '6px';
             box.innerHTML = `
-                <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
-                    <span style="font-size:20px;">🌱</span>
-                    <div>
-                        <div style="font-weight:600;font-size:13px;color:var(--text-bright);">${crop.name} Seed</div>
-                        <div style="font-size:11px;color:var(--gold-light);">💰 Buy: ${crop.seedPrice} Kodi</div>
-                    </div>
-                </div>
-                <div style="display:flex;gap:4px;">
-                    <button class="btn-primary" style="padding:3px 6px;font-size:10px;" onclick="buySeed('${key}', ${crop.seedPrice})">Buy</button>
-                    <button class="btn-secondary" style="padding:3px 6px;font-size:10px;color:var(--gold);" onclick="sellCrop('${key}', ${crop.kodi})">Sell Crop (${crop.kodi}K)</button>
+                <div style="font-size:12px;"><b>${crop.name}</b></div>
+                <div style="font-size:10px;color:var(--gold-light)">Seed: ${crop.seedPrice}K | Crop: ${crop.kodi}K</div>
+                <div style="display:flex;gap:4px;margin-top:4px;">
+                    <button class="btn-primary" style="padding:2px 4px;font-size:9px;" onclick="buySeed('${key}', ${crop.seedPrice})">Buy</button>
+                    <button class="btn-secondary" style="padding:2px 4px;font-size:9px;" onclick="sellCrop('${key}', ${crop.kodi})">Sell</button>
                 </div>
             `;
             grid.appendChild(box);
@@ -175,29 +206,20 @@ function renderMarketplace() {
 }
 
 function buySeed(cropType, price) {
-    if (G.kodi < price) {
-        toast('❌ पर्याप्त Kodi नहीं है!', 'error');
-        return;
-    }
-    if (isStorageFull(cropType, 'crops', 1)) return; // Storage capacity check
-
+    if (G.kodi < price) { toast('❌ No Kodi!', 'error'); return; }
     G.kodi -= price;
     G.seeds[cropType] = (G.seeds[cropType] || 0) + 1;
-    toast(`🛒 Bought 1x ${CROPS[cropType].name} Seed!`, 'success');
+    toast('🛒 Seed Purchased!', 'success');
     saveGame();
     updateHeader();
     renderInventory();
-    renderMarketplace();
 }
 
 function sellCrop(cropType, reward) {
-    if ((G.crops[cropType] || 0) <= 0) {
-        toast(`❌ आपके पास बेचने के लिए ${CROPS[cropType].name} नहीं है!`, 'error');
-        return;
-    }
+    if ((G.crops[cropType] || 0) <= 0) { toast('❌ No Crop!', 'error'); return; }
     G.crops[cropType]--;
     G.kodi += reward;
-    toast(`💰 Sold 1x ${CROPS[cropType].name}! +${reward} Kodi`, 'gold');
+    toast('💰 Crop Sold!', 'gold');
     saveGame();
     updateHeader();
     renderInventory();
@@ -207,73 +229,30 @@ function renderBuildings() {
     const cont = document.getElementById('buildings-container');
     if (!cont) return;
     cont.innerHTML = '';
-
-    const BUILDINGS_DATA = {
-        firepit: { name: 'Stone Firepit', emoji: '🔥', tier: 1 },
-        clay_oven: { name: 'Clay Oven', emoji: '🏺', tier: 2 },
-        ancient_hearth: { name: 'Ancient Hearth', emoji: '🏛️', tier: 3 }
-    };
-
-    Object.entries(BUILDINGS_DATA).forEach(([bId, bData]) => {
-        if (!G.unlockedBuildings.includes(bId)) return;
-
+    if (G.unlockedBuildings.includes('firepit')) {
         const div = document.createElement('div');
         div.className = 'inv-item';
         div.style.textAlign = 'left';
-        div.style.padding = '10px';
-        div.style.marginBottom = '8px';
-
-        const cooking = G.buildings[bId];
-        let statusHtml = '';
-
+        div.style.padding = '8px';
+        const cooking = G.buildings['firepit'];
         if (cooking) {
             const recipe = RECIPES[cooking.recipe];
-            const elapsed = now() - cooking.startedAt;
-            const remaining = Math.max(0, recipe.cookTime - elapsed);
+            const remaining = Math.max(0, recipe.cookTime - (now() - cooking.startedAt));
             const done = remaining === 0;
-
-            statusHtml = `
-                <div style="display:flex;align-items:center;gap:10px;background:var(--bg-mid);padding:6px;border-radius:6px;margin-top:6px;">
-                    <span style="font-size:22px;">${recipe.emoji}</span>
-                    <div style="flex:1;">
-                        <div style="font-size:12px;color:var(--green-light);font-weight:600;">Cooking: ${recipe.name}</div>
-                        <div style="font-size:10px;color:var(--text-dim);">${done ? '✅ Ready!' : '⏳ ' + formatTime(remaining)}</div>
-                    </div>
-                    <button class="btn-primary" style="padding:4px 8px;font-size:11px;" ${done ? '' : 'disabled'} onclick="collectFood('${bId}')">Collect</button>
-                </div>
-            `;
+            div.innerHTML = `🔥 <b>Firepit (Cooking)</b><br><span style="font-size:11px;">${recipe.name} (${done ? '✅ Ready' : remaining + 's remaining'})</span><br><button class="btn-primary" style="margin-top:4px;" ${done?'':'disabled'} onclick="collectFood('firepit')">Collect</button>`;
         } else {
-            statusHtml = `<div style="font-size:11px;color:var(--text-dim);margin-top:4px;">Available Recipes:</div><div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">`;
-            Object.entries(RECIPES).forEach(([rId, recipe]) => {
-                if (recipe.building !== bId) return;
-                const canCook = Object.entries(recipe.ingredients).every(([c, amt]) => (G.crops[c] || 0) >= amt);
-                
-                statusHtml += `
-                    <button class="btn-secondary" style="padding:3px 6px;font-size:10px;border-color:${canCook?'var(--green)':'var(--border)'}" ${canCook?'':'disabled'} onclick="startCooking('${bId}','${rId}')">
-                        ${recipe.emoji} ${recipe.name}
-                    </button>
-                `;
-            });
-            statusHtml += `</div>`;
+            div.innerHTML = `🔥 <b>Stone Firepit</b><br><button class="btn-secondary" style="padding:2px 6px;font-size:10px;margin-top:4px;" onclick="startCooking('firepit','baked_potato')">Cook Baked Potato (1x Potato)</button>`;
         }
-
-        div.innerHTML = `
-            <div style="display:flex;align-items:center;gap:6px;">
-                <span style="font-size:24px;">${bData.emoji}</span>
-                <span style="font-family:'Cinzel',serif;font-size:13px;color:var(--gold);font-weight:600;">${bData.name}</span>
-            </div>
-            ${statusHtml}
-        `;
         cont.appendChild(div);
-    });
+    }
 }
 
 function startCooking(bId, rId) {
     const recipe = RECIPES[rId];
+    let canCook = Object.entries(recipe.ingredients).every(([c, amt]) => (G.crops[c] || 0) >= amt);
+    if (!canCook) { toast('❌ Ingredients Missing!', 'error'); return; }
     Object.entries(recipe.ingredients).forEach(([c, amt]) => G.crops[c] -= amt);
-    
     G.buildings[bId] = { recipe: rId, startedAt: now() };
-    toast(`🔥 Cooking ${recipe.name}...`, 'success');
     saveGame();
     renderInventory();
     renderBuildings();
@@ -282,106 +261,22 @@ function startCooking(bId, rId) {
 function collectFood(bId) {
     const cooking = G.buildings[bId];
     if (!cooking) return;
-    
-    if (isStorageFull(cooking.recipe, 'food', 1)) return; // Food cap check
-
     G.food[cooking.recipe] = (G.food[cooking.recipe] || 0) + 1;
     delete G.buildings[bId];
-    
-    toast('✅ Food collected! ट्राइबल बैग से खाएं।', 'success');
+    toast('✅ Food Ready!', 'success');
     saveGame();
     renderInventory();
     renderBuildings();
 }
 
-// ══════════════════════════════════════════════
-// 4.4 TRIBAL NPCS & REBALANCED SKILLS
-// ══════════════════════════════════════════════
-
-const NPCS_DATA = [
-    { id:'granny', name:'Granny Kova', emoji:'👵', desc:'Basic tier 1 foods requirements' },
-    { id:'chieftain', name:'Chieftain Brul', emoji:'👨‍🦱', desc:'Requires wood, stones & raw materials' },
-    { id:'wanderer', name:'Wanderer Tesh', emoji:'🧙', desc:'Advanced multi-tier special recipes' }
-];
-
 function renderNPCs() {
     const cont = document.getElementById('npc-container');
-    if (!cont) return;
-    cont.innerHTML = '';
-
-    NPCS_DATA.forEach(npc => {
-        if (!G.npcOrders[npc.id]) {
-            G.npcOrders[npc.id] = { orderIdx: Math.floor(Math.random() * 3), assignedAt: now() };
-        }
-
-        // Hardcoded custom local orders balance per NPC for testing
-        const ordersList = {
-            granny: [{ want:'baked_potato', amt:3, reward:30 }, { want:'veggie_wrap', amt:1, reward:60 }, { want:'spiced_brinjal', amt:1, reward:80 }],
-            chieftain: [{ want:'potato', amt:20, isRaw:true, reward:40 }, { want:'chilli', amt:10, isRaw:true, reward:50 }, { want:'tomato', amt:5, isRaw:true, reward:60 }],
-            wanderer: [{ want:'bean_stew', amt:1, reward:250 }, { want:'carrot_glaze', amt:1, reward:500 }, { want:'evolution_feast', amt:1, reward:990 }]
-        };
-
-        const order = ordersList[npc.id][G.npcOrders[npc.id].orderIdx % 3];
-        const hasItems = order.isRaw ? (G.crops[order.want] || 0) >= order.amt : (G.food[order.want] || 0) >= order.amt;
-
-        const card = document.createElement('div');
-        card.className = 'inv-item';
-        card.style.textAlign = 'left';
-        card.style.padding = '8px';
-        card.style.marginBottom = '6px';
-        card.innerHTML = `
-            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-                <span style="font-size:24px;">${npc.emoji}</span>
-                <span style="font-family:'Cinzel',serif;font-size:12px;color:var(--gold-light);font-weight:600;">${npc.name}</span>
-            </div>
-            <div style="font-size:11px;color:var(--text-bright);margin-bottom:4px;">
-                📦 Wants: ${order.amt}x ${order.isRaw ? CROPS[order.want].name : RECIPES[order.want].name}
-                <div style="color:var(--gold);">💰 Reward: ${order.reward} Kodi</div>
-            </div>
-            <button class="deliver-btn" style="width:100%;padding:4px;font-size:11px;" ${hasItems ? '' : 'disabled'} onclick="deliverNPCOrder('${npc.id}', ${order.isRaw?true:false}, '${order.want}', ${order.amt}, ${order.reward})">
-                Deliver Items
-            </button>
-        `;
-        cont.appendChild(card);
-    });
+    if (cont) cont.innerHTML = '<div style="font-size:11px;color:var(--text-dim);">Elders are watching your progress. Complete orders later!</div>';
 }
 
-function deliverNPCOrder(npcId, isRaw, itemKey, amt, reward) {
-    if (isRaw) G.crops[itemKey] -= amt;
-    else G.food[itemKey] -= amt;
-
-    G.kodi += reward;
-    G.npcOrders[npcId].orderIdx++;
-    G.npcOrders[npcId].assignedAt = now();
-
-    toast(`✅ Order Delivered! +${reward} Kodi`, 'gold');
-    saveGame();
-    updateHeader();
-    renderInventory();
-    renderNPCs();
-    renderMarketplace();
+function closeModal() {
+    document.getElementById('modal-overlay').classList.remove('show');
 }
-
-function renderSkillTree() {
-    const cont = document.getElementById('skill-tree');
-    if(!cont) return;
-    cont.innerHTML = '<div style="font-size:11px;color:var(--text-dim);text-align:center;padding:12px;">Skill Tree UI Under Construction.<br>Phaser World Integration active.</div>';
-}
-
-function triggerReset() {
-    if(G.kodi < 200) { toast('❌ Reset के लिए 200 Kodi चाहिए!', 'error'); return; }
-    G.kodi -= 200;
-    G.skillPoints += G.unlockedSkills.length;
-    G.unlockedSkills = [];
-    toast('🎯 Skills Reset Completed!', 'success');
-    saveGame();
-    updateHeader();
-    renderInventory();
-}
-
-// ══════════════════════════════════════════════
-// 4.5 UNIFIED INTERFACE INITIALIZATION
-// ══════════════════════════════════════════════
 
 function renderAll() {
     updateHeader();
@@ -394,5 +289,5 @@ function renderAll() {
 window.onload = () => {
     renderAll();
     setInterval(checkWilt, 2000);
-    setInterval(renderBuildings, 2000); // Live updates for timers
+    setInterval(renderBuildings, 2000);
 };
