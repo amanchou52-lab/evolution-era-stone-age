@@ -1,4 +1,20 @@
-// GDD v3.0: Full 25 Islands Progression Grid (समस्या #6 फिक्स)
+function create() {
+    sceneRef = this;
+    drawIslandGrid(this);
+    
+    // ⏱️ OPTIMIZED TIMER LOOP: प्रोसेसर लोड कम करने के लिए टाइमर इवेंट को थोड़ा हल्का किया गया है
+    this.time.addEvent({
+        delay: 1000,
+        callback: () => {
+            // सिर्फ तभी टाइमर अपडेट चलाओ जब कोई पॉपअप (Modal) खुला न हो
+            if (!document.getElementById('modal-overlay').classList.contains('show')) {
+                updateLiveTimers();
+            }
+        },
+        callbackScope: this,
+        loop: true
+    });
+}// GDD v3.0: Full 25 Islands Progression Grid (समस्या #6 फिक्स)
 const PHASER_ISLANDS = [
     // Early Era (Islands 1-8)
     { id:1, r:2, c:2, type:'home',   lvl:1, cost:{}, res:'wood',  name:'Chief Longhouse' },
